@@ -1,0 +1,51 @@
+services:
+  timer:
+    build: '.'
+    restart: unless-stopped
+    container_name: timer-bot
+    env_file:
+      .env
+    volumes:
+      - ./data:/data/
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.timer-secure.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.timer-secure.entrypoints=websecure"
+      - "traefik.http.routers.timer-secure.tls=true"
+      - "traefik.http.routers.timer-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.services.timer-secure.loadbalancer.server.port=80"
+    networks:
+      - web
+
+  traefik:
+    image: "traefik:v2.3"
+    container_name: "traefik"
+    command:
+      - "--log.level=INFO"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.email=${LE_EMAIL}"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./letsencrypt:/letsencrypt"
+    networks:
+      - web
+    restart: always
+
+networks:
+  web:
+    external: true
