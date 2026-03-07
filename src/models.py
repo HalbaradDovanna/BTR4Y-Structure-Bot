@@ -7,11 +7,31 @@ from playhouse.pool import PooledPostgresqlDatabase
 # Initialize the database based on environment variables
 def get_database():
     """Get database instance based on environment configuration.
-    
-    If DB_HOST is set, uses PostgreSQL. Otherwise defaults to SQLite.
-    """
-    db_host = os.getenv('DB_HOST')
 
+    Priority:
+    1. DATABASE_URL — full connection string (Railway standard)
+    2. DB_HOST + individual DB_* vars — legacy explicit config
+    3. SQLite fallback for local dev
+    """
+    database_url = os.getenv('DATABASE_URL')
+    if database_url:
+        # Parse postgresql://user:password@host:port/dbname
+        from urllib.parse import urlparse
+        u = urlparse(database_url)
+        return PooledPostgresqlDatabase(
+            u.path.lstrip('/'),
+            user=u.username,
+            password=u.password,
+            host=u.hostname,
+            port=u.port or 5432,
+            max_connections=20,
+            stale_timeout=300,
+            timeout=30,
+            autoconnect=True,
+            autocommit=True
+        )
+
+    db_host = os.getenv('DB_HOST')
     if db_host:
         # Use PostgreSQL when DB_HOST is specified
         return PooledPostgresqlDatabase(
@@ -26,9 +46,9 @@ def get_database():
             autoconnect=True,
             autocommit=True
         )
-    else:
-        # Default to SQLite in data/ directory
-        return SqliteDatabase('data/bot.sqlite')
+
+    # Default to SQLite in data/ directory
+    return SqliteDatabase('data/bot.sqlite')
 
 
 db = get_database()
