@@ -460,5 +460,54 @@ async def dryrun(interaction: Interaction):
         )
 
 
+@bot.tree.command(
+    name="setrole",
+    description="Set a role to ping when your structures are attacked (instead of @everyone)."
+)
+@app_commands.describe(
+    role="The Discord role to ping on attack notifications."
+)
+@command_error_handler
+async def setrole(interaction: Interaction, role: discord.Role):
+    user = User.get_or_none(user_id=str(interaction.user.id))
+    if user is None:
+        await interaction.response.send_message(
+            "You are not a registered user. Use `/auth` to authorize some characters first.",
+            ephemeral=True
+        )
+        return
+
+    user.ping_role_id = str(role.id)
+    user.save()
+
+    await interaction.response.send_message(
+        f"Attack notifications will now ping {role.mention} instead of @everyone.",
+        ephemeral=True
+    )
+
+
+@bot.tree.command(
+    name="clearrole",
+    description="Remove the attack-ping role, reverting to @everyone."
+)
+@command_error_handler
+async def clearrole(interaction: Interaction):
+    user = User.get_or_none(user_id=str(interaction.user.id))
+    if user is None:
+        await interaction.response.send_message(
+            "You are not a registered user. Use `/auth` to authorize some characters first.",
+            ephemeral=True
+        )
+        return
+
+    user.ping_role_id = None
+    user.save()
+
+    await interaction.response.send_message(
+        "Attack notifications will now use @everyone again.",
+        ephemeral=True
+    )
+
+
 if __name__ == "__main__":
     bot.run(os.environ["DISCORD_TOKEN"])
