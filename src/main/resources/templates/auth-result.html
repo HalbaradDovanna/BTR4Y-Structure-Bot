@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EVE Structure Monitor — Authorization Result</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:        #080c10;
+            --surface:   #0d1520;
+            --border:    #1a2d44;
+            --gold:      #c8a84b;
+            --gold-dim:  #7a6530;
+            --cyan:      #4af0e0;
+            --cyan-dim:  #1a5a55;
+            --green:     #50e0a0;
+            --green-dim: #1a4030;
+            --red:       #e05050;
+            --red-dim:   #401a1a;
+            --text:      #b8ccd8;
+            --text-dim:  #5a7080;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Share Tech Mono', monospace;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image:
+                radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.3) 0%, transparent 100%),
+                radial-gradient(1px 1px at 60% 70%, rgba(255,255,255,0.2) 0%, transparent 100%),
+                radial-gradient(1px 1px at 80% 20%, rgba(255,255,255,0.4) 0%, transparent 100%),
+                radial-gradient(2px 2px at 40% 60%, rgba(74,240,224,0.1) 0%, transparent 100%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(74,240,224,0.025) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(74,240,224,0.025) 1px, transparent 1px);
+            background-size: 60px 60px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            width: min(580px, 95vw);
+        }
+
+        .top-line {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 28px;
+        }
+        .top-line::before { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--gold-dim)); }
+        .top-line::after  { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--gold-dim), transparent); }
+        .top-line span { color: var(--gold-dim); font-size: 10px; letter-spacing: 4px; white-space: nowrap; }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            padding: 36px;
+            position: relative;
+            clip-path: polygon(0 0, calc(100% - 24px) 0, 100% 24px, 100% 100%, 24px 100%, 0 calc(100% - 24px));
+        }
+        .card::before {
+            content: '';
+            position: absolute;
+            top: -1px; right: -1px;
+            width: 36px; height: 36px;
+            border-top: 2px solid var(--gold);
+            border-right: 2px solid var(--gold);
+        }
+        .card::after {
+            content: '';
+            position: absolute;
+            bottom: -1px; left: -1px;
+            width: 36px; height: 36px;
+            border-bottom: 2px solid var(--gold);
+            border-left: 2px solid var(--gold);
+        }
+
+        /* ---- SUCCESS STATE ---- */
+        .status-banner {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 14px 18px;
+            margin-bottom: 28px;
+        }
+        .status-banner.success { background: rgba(80,224,160,0.06); border: 1px solid var(--green); border-left: 3px solid var(--green); }
+        .status-banner.error   { background: rgba(224,80,80,0.06);  border: 1px solid var(--red);   border-left: 3px solid var(--red); }
+
+        .status-icon { font-size: 22px; flex-shrink: 0; }
+        .status-text h2 { font-family: 'Rajdhani', sans-serif; font-size: 16px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; }
+        .status-banner.success .status-text h2 { color: var(--green); }
+        .status-banner.error   .status-text h2 { color: var(--red); }
+        .status-text p { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+
+        /* ---- DATA ROWS ---- */
+        .data-section { margin-bottom: 24px; }
+        .section-label {
+            font-size: 10px;
+            letter-spacing: 3px;
+            color: var(--cyan);
+            margin-bottom: 10px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid var(--cyan-dim);
+        }
+
+        .data-row {
+            display: grid;
+            grid-template-columns: 160px 1fr;
+            gap: 8px;
+            align-items: start;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(26,45,68,0.5);
+        }
+        .data-row:last-child { border-bottom: none; }
+        .data-key   { font-size: 11px; color: var(--text-dim); letter-spacing: 1px; padding-top: 1px; }
+        .data-value { font-size: 12px; color: var(--text); word-break: break-all; }
+        .data-value.highlight { color: var(--gold); }
+
+        /* Token box */
+        .token-box {
+            background: #050810;
+            border: 1px solid var(--border);
+            padding: 12px 14px;
+            font-size: 11px;
+            color: var(--cyan);
+            word-break: break-all;
+            line-height: 1.5;
+            position: relative;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .token-box:hover { border-color: var(--cyan-dim); }
+
+        .copy-hint {
+            position: absolute;
+            top: 8px; right: 10px;
+            font-size: 10px;
+            color: var(--text-dim);
+            letter-spacing: 1px;
+            transition: color 0.2s;
+        }
+        .token-box:hover .copy-hint { color: var(--cyan); }
+        .token-box.copied { border-color: var(--green); }
+        .token-box.copied .copy-hint { color: var(--green); }
+
+        /* Instructions panel */
+        .instructions {
+            background: rgba(200,168,75,0.04);
+            border: 1px solid var(--gold-dim);
+            border-left: 3px solid var(--gold);
+            padding: 16px 18px;
+            margin-top: 24px;
+        }
+        .instructions .inst-label {
+            font-size: 10px;
+            letter-spacing: 3px;
+            color: var(--gold);
+            margin-bottom: 10px;
+        }
+        .step {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 10px;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .step-num {
+            background: var(--gold);
+            color: var(--bg);
+            font-family: 'Rajdhani', sans-serif;
+            font-weight: 700;
+            font-size: 11px;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        /* Error state */
+        .error-detail {
+            background: rgba(224,80,80,0.05);
+            border: 1px solid var(--red);
+            padding: 14px 16px;
+            font-size: 12px;
+            color: var(--red);
+            margin-bottom: 20px;
+            line-height: 1.6;
+        }
+
+        .back-btn {
+            display: inline-block;
+            padding: 12px 28px;
+            background: transparent;
+            border: 1px solid var(--gold);
+            color: var(--gold);
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            text-decoration: none;
+            margin-top: 20px;
+            transition: background 0.2s, color 0.2s;
+        }
+        .back-btn:hover { background: var(--gold); color: var(--bg); }
+
+        .divider { height: 1px; background: linear-gradient(90deg, transparent, var(--border), transparent); margin: 24px 0; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="top-line"><span>STRUCTURE MONITOR // AUTH RESULT</span></div>
+
+    <div class="card">
+
+        <!-- ===== SUCCESS ===== -->
+        <div th:if="${success}">
+            <div class="status-banner success">
+                <div class="status-icon">✓</div>
+                <div class="status-text">
+                    <h2>Authorization Successful</h2>
+                    <p>Token generated — copy the values below into Railway.</p>
+                </div>
+            </div>
+
+            <div class="data-section">
+                <div class="section-label">// CHARACTER INFO</div>
+                <div class="data-row">
+                    <span class="data-key">CHARACTER NAME</span>
+                    <span class="data-value highlight" th:text="${characterName}">Capsuleer Name</span>
+                </div>
+                <div class="data-row">
+                    <span class="data-key">CHARACTER ID</span>
+                    <span class="data-value" th:text="${characterId}">123456789</span>
+                </div>
+            </div>
+
+            <div class="data-section">
+                <div class="section-label">// RAILWAY ENVIRONMENT VARIABLES</div>
+
+                <div class="data-row">
+                    <span class="data-key">EVE_CHARACTER_ID</span>
+                    <div>
+                        <div class="token-box" th:onclick="|copyToClipboard('${characterId}', this)|">
+                            <span class="copy-hint">[ CLICK TO COPY ]</span>
+                            <span th:text="${characterId}">123456789</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="data-row" style="margin-top:10px;">
+                    <span class="data-key">EVE_REFRESH_TOKEN</span>
+                    <div>
+                        <div class="token-box" th:onclick="|copyToClipboard('${refreshToken}', this)|">
+                            <span class="copy-hint">[ CLICK TO COPY ]</span>
+                            <span th:text="${refreshToken}">your-refresh-token-here</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="instructions">
+                <div class="inst-label">// NEXT STEPS</div>
+                <div class="step">
+                    <div class="step-num">1</div>
+                    <div>Click each box above to copy the value to your clipboard.</div>
+                </div>
+                <div class="step">
+                    <div class="step-num">2</div>
+                    <div>Open your Railway project → your service → <strong>Variables</strong> tab.</div>
+                </div>
+                <div class="step">
+                    <div class="step-num">3</div>
+                    <div>Paste <code>EVE_CHARACTER_ID</code> and <code>EVE_REFRESH_TOKEN</code> into the matching variable fields.</div>
+                </div>
+                <div class="step">
+                    <div class="step-num">4</div>
+                    <div>Railway will redeploy automatically. Check the logs — you should see "Structure cache updated."</div>
+                </div>
+            </div>
+
+            <div class="divider"></div>
+            <p style="font-size:11px; color:var(--text-dim); line-height:1.7;">
+                ⚠ Close this tab when done. The refresh token is sensitive — treat it like a password.
+                It only has read-only ESI access and can be revoked any time at
+                <strong>account.eveonline.com → Third Party Applications</strong>.
+            </p>
+        </div>
+
+        <!-- ===== ERROR ===== -->
+        <div th:if="${error}">
+            <div class="status-banner error">
+                <div class="status-icon">✕</div>
+                <div class="status-text">
+                    <h2>Authorization Failed</h2>
+                    <p>Something went wrong during the EVE SSO login.</p>
+                </div>
+            </div>
+
+            <div class="error-detail" th:text="${error}">Error details here.</div>
+
+            <p style="font-size:12px; color:var(--text-dim); line-height:1.7; margin-bottom: 16px;">
+                Common causes: the character doesn't have Director roles, the ESI app scopes
+                are incorrect, or the callback URL in your EVE developer app doesn't match
+                <code>EVE_ESI_CALLBACK_URL</code> in Railway.
+            </p>
+
+            <a href="/auth" class="back-btn">← Try Again</a>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    function copyToClipboard(text, element) {
+        navigator.clipboard.writeText(text).then(() => {
+            const hint = element.querySelector('.copy-hint');
+            const original = hint.textContent;
+            hint.textContent = '[ COPIED! ]';
+            element.classList.add('copied');
+            setTimeout(() => {
+                hint.textContent = original;
+                element.classList.remove('copied');
+            }, 2000);
+        }).catch(() => {
+            // Fallback: select the text
+            const range = document.createRange();
+            range.selectNode(element.querySelector('span:last-child'));
+            window.getSelection().removeAllRanges();
+            window.getSelection().addRange(range);
+        });
+    }
+</script>
+</body>
+</html>
