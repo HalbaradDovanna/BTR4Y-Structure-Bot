@@ -183,5 +183,8 @@ async def webserver(bot, preston: Preston):
     app.add_routes(routes)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, port=int(os.getenv('CALLBACK_PORT', '80')))
+    # Railway requires binding to 0.0.0.0 and uses the PORT env var.
+    # Fall back to CALLBACK_PORT, then 8080 if neither is set.
+    port = int(os.getenv('PORT', os.getenv('CALLBACK_PORT', '8080')))
+    site = web.TCPSite(runner, host='0.0.0.0', port=port)
     await site.start()
