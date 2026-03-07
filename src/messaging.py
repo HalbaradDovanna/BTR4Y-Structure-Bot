@@ -31,7 +31,7 @@ async def get_channel(user, bot):
 
 async def send_background_message(bot, user, message, identifier="<no identifier>", quiet=False):
     """Wrapper to send a message to a user, automatically handles not being able to reach user and fallback options.
-    Returns true if successful
+    Returns true if successful.
     """
 
     user_channel, is_emergency_dm = await get_channel(user, bot)
@@ -78,3 +78,64 @@ async def send_background_message(bot, user, message, identifier="<no identifier
     else:
         user_disconnected_count[user] = 0
         return True
+
+
+async def send_or_edit_persistent_message(bot, user, message: str, stored_message_id: str | None,
+                                          stored_channel_id: str | None,
+                                          identifier="<no identifier>"):
+    """Post a new message OR edit the existing one in-place for persistent status displays.
+
+    Returns (message_id, channel_id) of the live message, or (None, None) on failure.
+    The caller is responsible for persisting these values to the database.
+    """
+    # Try to edit the existing message first
+    if stored_message_id and stored_channel_id:
+        try:
+            channel = await bot.fetch_channel(int(stored_channel_id))
+            existing = await channel.fetch_message(int(stored_message_id))
+            await existing.edit(content=message)
+            logger.debug(f"Edited persistent message {stored_message_id} for {identifier}")
+            return stored_message_id, stored_channel_id
+        except (discord.errors.NotFound, discord.errors.Forbidden, discord.errors.HTTPException) as e:
+            logger.info(
+                f"Could not edit persistent message {stored_message_id} for {identifier} ({e}), "
+                f"will post a new one."
+            )
+        except Exception as e:
+            logger.warning(
+                f"Unexpected error editing persistent message for {identifier}: {e}", exc_info=True
+            )
+
+    # Fall back to posting a fresh message
+    result = await get_channel(user, bot)
+    if result is None:
+        user_disconnected_count[user] += 1
+        return None, None
+
+    channel, is_emergency_dm = result
+    try:
+        if is_emergency_dm:
+            await channel.send(
+                "### WARNING\n"
+                f"<@{user.user_id}>, timer-bot could not reach your callback channel and fell back to DMs. "
+                "Use `/callback` in a server channel to fix this."
+            )
+        sent = await channel.send(message)
+        user_disconnected_count[user] = 0
+        logger.debug(f"Posted new persistent message {sent.id} for {identifier}")
+        return str(sent.id), str(channel.id)
+    except (discord.errors.Forbidden, discord.errors.NotFound, discord.errors.HTTPException,
+            discord.errors.InvalidData):
+        logger.info(
+            f"send_or_edit_persistent_message to {user} failed (discord permissions). "
+            f"Identifier: {identifier}"
+        )
+        user_disconnected_count[user] += 1
+        return None, None
+    except Exception as e:
+        logger.warning(
+            f"send_or_edit_persistent_message to {user} failed (unknown). "
+            f"Identifier: {identifier}: {e}", exc_info=True
+        )
+        user_disconnected_count[user] += 1
+        return None, None
