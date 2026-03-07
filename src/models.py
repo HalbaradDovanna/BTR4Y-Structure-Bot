@@ -20,11 +20,11 @@ def get_database():
             password=os.getenv('DB_PASSWORD', ''),
             host=db_host,
             port=int(os.getenv('DB_PORT', '5432')),
-            max_connections=20,  # Maximum number of connections in the pool
-            stale_timeout=300,  # Seconds a connection can remain unused before being closed
-            timeout=30,  # Seconds to wait for a connection from the pool
-            autoconnect=True,  # Automatically connect when needed
-            autocommit=True  # Automatically commit transactions
+            max_connections=20,
+            stale_timeout=300,
+            timeout=30,
+            autoconnect=True,
+            autocommit=True
         )
     else:
         # Default to SQLite in data/ directory
@@ -42,6 +42,9 @@ class BaseModel(Model):
 class User(BaseModel):
     user_id = CharField(primary_key=True)
     callback_channel_id = CharField()
+    # Role ID to ping when a structure is attacked (e.g. "123456789").
+    # NULL means fall back to @everyone.
+    ping_role_id = CharField(null=True)
 
     def __repr__(self):
         return f"User(user_id={self.user_id}, callback_channel_id={self.callback_channel_id})"
@@ -81,6 +84,10 @@ class Structure(BaseModel):
     structure_id = CharField(primary_key=True)
     last_state = CharField()
     last_fuel_warning = IntegerField()
+    # Persistent fuel status message: store the Discord message ID and the
+    # channel it was posted in so we can edit it in place on future updates.
+    fuel_message_id = CharField(null=True)
+    fuel_channel_id = CharField(null=True)
 
 
 class Migration(BaseModel):
@@ -91,3 +98,35 @@ class Migration(BaseModel):
 def initialize_database():
     with db:
         db.create_tables([User, Character, Challenge, Notification, Structure, Migration])
+
+        # ── Safe migrations: add new columns if they don't exist yet ──────────
+        # This keeps existing deployments working without a full schema reset.
+        _safe_add_column(User, 'ping_role_id',     'VARCHAR(255)')
+        _safe_add_column(Structure, 'fuel_message_id', 'VARCHAR(255)')
+        _safe_add_column(Structure, 'fuel_channel_id', 'VARCHAR(255)')
+
+
+def _safe_add_column(model, column_name: str, column_type: str):
+    """Add a column to an existing table if it doesn't already exist."""
+    table = model._meta.table_name
+    try:
+        if isinstance(db, PooledPostgresqlDatabase):
+            # PostgreSQL: query information_schema
+            exists = db.execute_sql(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name=%s AND column_name=%s",
+                (table, column_name)
+            ).fetchone()
+        else:
+            # SQLite: use PRAGMA
+            cols = [row[1] for row in db.execute_sql(f"PRAGMA table_info({table})").fetchall()]
+            exists = column_name in cols
+
+        if not exists:
+            db.execute_sql(f'ALTER TABLE "{table}" ADD COLUMN "{column_name}" {column_type}')
+    except Exception as e:
+        # Non-fatal — log and continue
+        import logging
+        logging.getLogger('discord.timer').warning(
+            f"_safe_add_column({table}.{column_name}): {e}"
+        )
