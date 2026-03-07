@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from messaging import send_background_message
+from messaging import send_background_message, send_or_edit_persistent_message
 from models import Structure
 
 # Mapping of EVE states to human-readable states
@@ -55,13 +55,35 @@ def structure_info_text(structure: dict) -> str:
     if fuel_expires is not None:
         structure_message += f"**Fuel:** <t:{int(fuel_expires.timestamp())}> (<t:{int(fuel_expires.timestamp())}:R>) ({fuel_expires} ET)\n"
     else:
-        # fuel_expires is None e.g. structure is anchoring
         if state in ["anchoring", "anchor_vulnerable"]:
             structure_message += f"**Fuel:** Not fueled yet (anchoring)\n"
         else:
             structure_message += f"**Fuel:** Out of fuel!\n"
 
     return structure_message
+
+
+def fuel_status_text(structure: dict) -> str:
+    """Builds a compact, always-current fuel status line for the persistent message."""
+    structure_name = structure.get('name', 'Unknown')
+    state = structure.get('state', 'unknown')
+    fuel_expires = to_datetime(structure.get('fuel_expires'))
+
+    lines = [f"### ⛽ {structure_name}"]
+    lines.append(f"**State:** {state_mapping.get(state, 'Unknown')}")
+
+    if fuel_expires is not None:
+        lines.append(
+            f"**Fuel expires:** <t:{int(fuel_expires.timestamp())}:F> "
+            f"(<t:{int(fuel_expires.timestamp())}:R>)"
+        )
+    elif state in ["anchoring", "anchor_vulnerable"]:
+        lines.append("**Fuel:** Not fueled yet (anchoring)")
+    else:
+        lines.append("**Fuel:** ⚠️ Out of fuel!")
+
+    lines.append(f"*Last updated: <t:{int(datetime.now(tz=timezone.utc).timestamp())}:R>*")
+    return "\n".join(lines)
 
 
 def next_fuel_warning(structure: dict) -> int:
@@ -79,16 +101,19 @@ def next_fuel_warning(structure: dict) -> int:
 
 
 async def send_structure_message(structure, bot, user, identifier="<no identifier>"):
-    """For a structure state if there are any changes, take action and inform a user"""
+    """For a structure state if there are any changes, take action and inform a user."""
 
     structure_db, created = Structure.get_or_create(
         structure_id=structure.get('structure_id'),
         defaults={
             "last_state": structure.get('state'),
             "last_fuel_warning": next_fuel_warning(structure),
+            "fuel_message_id": None,
+            "fuel_channel_id": None,
         },
     )
 
+    # ── State-change alerts (one-off messages, not persistent) ────────────────
     if created:
         message = f"Structure {structure.get('name')} newly found in state:\n{structure_info_text(structure)}"
         await send_background_message(bot, user, message, identifier)
@@ -102,31 +127,46 @@ async def send_structure_message(structure, bot, user, identifier="<no identifie
 
         current_fuel_warning = next_fuel_warning(structure)
 
-        if structure_db.last_fuel_warning is None:  # Maybe remove this clause?
+        if structure_db.last_fuel_warning is None:
             structure_db.last_fuel_warning = current_fuel_warning
             structure_db.save()
-            return
 
         elif current_fuel_warning > structure_db.last_fuel_warning:
             if structure_db.last_fuel_warning == -1:
-                message = f"Structure {structure.get('name')} got initially fueled with:\n{structure_info_text(structure)}"
+                alert = f"Structure {structure.get('name')} got initially fueled with:\n{structure_info_text(structure)}"
             else:
-                message = f"Structure {structure.get('name')} has been refueled:\n{structure_info_text(structure)}"
-            if await send_background_message(bot, user, message, identifier):
+                alert = f"Structure {structure.get('name')} has been refueled:\n{structure_info_text(structure)}"
+            if await send_background_message(bot, user, alert, identifier):
                 structure_db.last_fuel_warning = current_fuel_warning
                 structure_db.save()
-                return
 
         elif current_fuel_warning < structure_db.last_fuel_warning:
             state = structure.get('state')
             if current_fuel_warning == -1:
                 if state in ["anchoring", "anchor_vulnerable"]:
-                    return
+                    pass  # not a real out-of-fuel
                 else:
-                    message = f"Final warning, structure {structure.get('name')} ran out of fuel:\n{structure_info_text(structure)}"
+                    alert = f"Final warning, structure {structure.get('name')} ran out of fuel:\n{structure_info_text(structure)}"
+                    if await send_background_message(bot, user, alert, identifier):
+                        structure_db.last_fuel_warning = current_fuel_warning
+                        structure_db.save()
             else:
-                message = f"{structure_db.last_fuel_warning}-day warning, structure {structure.get('name')} is running low on fuel:\n{structure_info_text(structure)}"
-            if await send_background_message(bot, user, message, identifier):
-                structure_db.last_fuel_warning = current_fuel_warning
-                structure_db.save()
-                return
+                alert = f"{structure_db.last_fuel_warning}-day warning, structure {structure.get('name')} is running low on fuel:\n{structure_info_text(structure)}"
+                if await send_background_message(bot, user, alert, identifier):
+                    structure_db.last_fuel_warning = current_fuel_warning
+                    structure_db.save()
+
+    # ── Persistent fuel status message (always kept up to date) ───────────────
+    # This message is edited in-place every time the structure is polled so
+    # there is always one current "live" fuel readout per structure.
+    persistent_text = fuel_status_text(structure)
+    msg_id, chan_id = await send_or_edit_persistent_message(
+        bot, user, persistent_text,
+        stored_message_id=structure_db.fuel_message_id,
+        stored_channel_id=structure_db.fuel_channel_id,
+        identifier=identifier,
+    )
+    if msg_id and (msg_id != structure_db.fuel_message_id or chan_id != structure_db.fuel_channel_id):
+        structure_db.fuel_message_id = msg_id
+        structure_db.fuel_channel_id = chan_id
+        structure_db.save()
