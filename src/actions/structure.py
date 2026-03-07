@@ -82,7 +82,7 @@ def fuel_status_text(structure: dict) -> str:
     else:
         lines.append("**Fuel:** ⚠️ Out of fuel!")
 
-    lines.append(f"*Last updated: <t:{int(datetime.now(tz=timezone.utc).timestamp())}:R>*")
+
     return "\n".join(lines)
 
 
