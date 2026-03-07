@@ -50,9 +50,6 @@ def get_reinforce_exit_time(notification: dict) -> datetime | None:
     for line in notification.get("text").split("\n"):
         if "reinforceExitTime:" in line:
             filetime = int(line.split(" ")[1])
-            # Convert to datetime
-            # FILETIME starts from January 1st 1601
-            # There are 10,000,000 intervals in one second
             unix_epoch_start = datetime(1601, 1, 1)
             return unix_epoch_start + timedelta(microseconds=filetime / 10)
     return None
@@ -63,9 +60,22 @@ def poco_timer_text(notification: dict) -> str:
     return f"**Timer:** <t:{int(state_expires.timestamp())}> (<t:{int(state_expires.timestamp())}:R>) ({state_expires} ET)\n"
 
 
-async def structure_notification_text(notification: dict, authed_preston: Preston) -> str:
+def ping_text(user) -> str:
+    """Returns the appropriate ping string for a user.
+
+    Uses the user's configured role if set, otherwise falls back to @everyone.
+    Set via the /setrole command.
+    """
+    role_id = getattr(user, 'ping_role_id', None)
+    if role_id:
+        return f"<@&{role_id}>"
+    return "@everyone"
+
+
+async def structure_notification_text(notification: dict, authed_preston: Preston, user=None) -> str:
     """Returns a human-readable message of a structure notification"""
-    # noinspection PyBroadException
+    ping = ping_text(user) if user is not None else "@everyone"
+
     try:
         structure_name = (await authed_preston.get_op(
             "get_universe_structures_structure_id",
@@ -76,19 +86,19 @@ async def structure_notification_text(notification: dict, authed_preston: Presto
 
     match notification.get('type'):
         case "StructureLostArmor":
-            return f"@everyone Structure {structure_name} has lost it's armor!\n"
+            return f"{ping} Structure {structure_name} has lost its armor!\n"
         case "StructureLostShields":
-            return f"@everyone Structure {structure_name} has lost it's shields!\n"
+            return f"{ping} Structure {structure_name} has lost its shields!\n"
         case "StructureUnanchoring":
-            return f"@everyone Structure {structure_name} is now unanchoring!\n"
+            return f"{ping} Structure {structure_name} is now unanchoring!\n"
         case "StructureUnderAttack":
-            return f"@everyone Structure {structure_name} is under attack{await make_attribution(notification, authed_preston)}!\n"
+            return f"{ping} Structure {structure_name} is under attack{await make_attribution(notification, authed_preston)}!\n"
         case "StructureWentHighPower":
-            return f"@everyone Structure {structure_name} is now high power!\n"
+            return f"{ping} Structure {structure_name} is now high power!\n"
         case "StructureWentLowPower":
-            return f"@everyone Structure {structure_name} is now low power!\n"
+            return f"{ping} Structure {structure_name} is now low power!\n"
         case "StructureOnline":
-            return f"@everyone Structure {structure_name} went online!\n"
+            return f"{ping} Structure {structure_name} went online!\n"
         case _:
             return ""
 
@@ -105,27 +115,26 @@ async def get_poco_name(notification: dict, preston: Preston) -> str:
     return "Unknown Poco"
 
 
-async def poco_notification_text(notification: dict, preston: Preston) -> str:
-    """Returns a human-readable message of a structure notification"""
+async def poco_notification_text(notification: dict, preston: Preston, user=None) -> str:
+    """Returns a human-readable message of a poco notification"""
+    ping = ping_text(user) if user is not None else "@everyone"
 
     match notification.get('type'):
         case "OrbitalAttacked":
-            return f"@everyone {await get_poco_name(notification, preston)} is under attack{await make_attribution(notification, preston)}!\n"
+            return f"{ping} {await get_poco_name(notification, preston)} is under attack{await make_attribution(notification, preston)}!\n"
         case "OrbitalReinforced":
-            return f"@everyone {await get_poco_name(notification, preston)} has ben reinforced{await make_attribution(notification, preston)}!\n{poco_timer_text(notification)}\n"
+            return f"{ping} {await get_poco_name(notification, preston)} has been reinforced{await make_attribution(notification, preston)}!\n{poco_timer_text(notification)}\n"
         case _:
             return ""
 
 
 def is_poco_notification(notification: dict) -> bool:
-    """returns true if a notification is about a structure"""
-    # All structure notifications start with Structure... so we can use that
+    """returns true if a notification is about a poco"""
     return "Orbital" in notification.get('type')
 
 
 def is_structure_notification(notification: dict) -> bool:
     """returns true if a notification is about a structure"""
-    # All structure notifications start with Structure... so we can use that
     return "Structure" in notification.get('type')
 
 
@@ -141,13 +150,13 @@ async def send_notification_message(notification, bot, user, authed_preston, ide
     notif, created = Notification.get_or_create(notification_id=notification_id, timestamp=timestamp)
 
     if is_structure_notification(notification):
-        if not notif.sent and len(message := await structure_notification_text(notification, authed_preston)) > 0:
+        if not notif.sent and len(message := await structure_notification_text(notification, authed_preston, user=user)) > 0:
             if await send_background_message(bot, user, message, identifier):
                 notif.sent = True
                 notif.save()
 
     if is_poco_notification(notification):
-        if not notif.sent and len(message := await poco_notification_text(notification, authed_preston)) > 0:
+        if not notif.sent and len(message := await poco_notification_text(notification, authed_preston, user=user)) > 0:
             if await send_background_message(bot, user, message, identifier):
                 notif.sent = True
                 notif.save()
