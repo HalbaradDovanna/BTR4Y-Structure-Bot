@@ -6,8 +6,8 @@ from discord.ext import tasks
 
 from actions.esi import handle_auth_error, handle_structure_error, handle_notification_error
 from actions.notification import send_notification_message
-from actions.structure import send_structure_message
-from messaging import send_background_message
+from actions.structure import send_structure_message, build_fuel_board
+from messaging import send_background_message, send_or_edit_persistent_message
 from models import Character, User, Notification
 
 logger = logging.getLogger('discord.timer.relay')
@@ -31,9 +31,7 @@ def is_server_downtime_now(extended=False):
 
 
 async def schedule_characters(action_lock, phase, total_phases):
-    """Returns a subset of characters depending on the current phase, such that in total_phases
-    all characters are used exactly once, and characters in the same corp are spread as evenly as possible."""
-
+    """Returns a subset of characters depending on the current phase."""
     try:
         if is_server_downtime_now():
             logger.info("ESI is probably down (11:00–11:10 UTC). Skipping this run.")
@@ -44,7 +42,6 @@ async def schedule_characters(action_lock, phase, total_phases):
             for character in Character.select():
                 corporation_characters[character.corporation_id].append(character)
 
-            # Now go through each corporation and run depending on the phase
             for corporation_id, characters in corporation_characters.items():
                 for i, character in enumerate(characters):
                     if phase == int(i / len(characters) * total_phases):
@@ -102,10 +99,13 @@ async def notification_pings(action_lock, preston, bot):
 
 @tasks.loop(seconds=STATUS_CACHE_TIME // STATUS_PHASES + 1)
 async def status_pings(action_lock, preston, bot):
-    """Periodically fetch structure state apu from ESI"""
+    """Periodically fetch structure state from ESI and update the fuel board."""
     global status_phase
     status_phase = (status_phase + 1) % STATUS_PHASES
     logger.debug(f"Running status_pings in phase {status_phase}.")
+
+    # Collect all structures per user so we can build one combined fuel board
+    user_structures: dict[str, list[dict]] = collections.defaultdict(list)
 
     async for character in schedule_characters(action_lock, status_phase, STATUS_PHASES):
         try:
@@ -122,28 +122,63 @@ async def status_pings(action_lock, preston, bot):
             except aiohttp.ClientResponseError as exp:
                 await handle_structure_error(character, authed_preston, exp, bot=bot, user=character.user)
                 continue
-        except aiohttp.ClientConnectionError as exp:
+        except aiohttp.ClientConnectionError:
             if not is_server_downtime_now(extended=True):
                 logger.warning(
                     f"status_pings information gathering got a ClientConnectionError"
                     f" for {character}, skipping..."
                 )
+            continue
         except Exception as e:
             logger.error(
-                f"status_pings information gathering got an unfamiliar exception for {character}: {e}.", exc_info=True
+                f"status_pings information gathering got an unfamiliar exception for {character}: {e}.",
+                exc_info=True
             )
-        else:
-            try:
-                for structure in response:
-                    await send_structure_message(structure, bot, character.user, identifier=str(character))
-            except Exception as e:
-                logger.error(f"status_pings information sendinggot an unfamiliar exception for {character}: {e}.",
-                             exc_info=True)
+            continue
+
+        try:
+            for structure in response:
+                # Handle state-change alerts and fuel threshold alerts
+                await send_structure_message(structure, bot, character.user, identifier=str(character))
+                # Accumulate structures for this user's fuel board
+                user_structures[character.user.user_id].append(structure)
+        except Exception as e:
+            logger.error(
+                f"status_pings information sending got an unfamiliar exception for {character}: {e}.",
+                exc_info=True
+            )
+
+    # ── Update one fuel board message per user ────────────────────────────────
+    for user_id, structures in user_structures.items():
+        try:
+            user = User.get_or_none(User.user_id == user_id)
+            if user is None:
+                continue
+
+            board_text = build_fuel_board(structures)
+            msg_id, chan_id = await send_or_edit_persistent_message(
+                bot, user, board_text,
+                stored_message_id=user.fuel_board_message_id,
+                stored_channel_id=user.fuel_board_channel_id,
+                identifier=f"fuel_board:{user_id}",
+            )
+            if msg_id and (
+                msg_id != user.fuel_board_message_id or
+                chan_id != user.fuel_board_channel_id
+            ):
+                user.fuel_board_message_id = msg_id
+                user.fuel_board_channel_id = chan_id
+                user.save()
+        except Exception as e:
+            logger.error(
+                f"status_pings fuel board update failed for user {user_id}: {e}.",
+                exc_info=True
+            )
 
 
 @tasks.loop(hours=42)
 async def no_auth_pings(action_lock, bot):
-    """Periodically remind users that don't have characters linked so they don't get surprised."""
+    """Periodically remind users that don't have characters linked."""
     async with action_lock:
         try:
             for user in User.select():
@@ -152,18 +187,17 @@ async def no_auth_pings(action_lock, bot):
                         "### WARNING\n"
                         f"<@{user.user_id}>, your discord account is linked to timer-bot, but you have not authorized any characters.\n"
                         f"This means you will not get any notifications about reinforced structures or fuel"
-                        f"- If you to not intend to use this bot anymore, write `/revoke` to de-register.\n"
+                        f"- If you do not intend to use this bot anymore, write `/revoke` to de-register.\n"
                         f"- Otherwise add some character with `/auth`"
                     )
                     await send_background_message(bot, user, warning_text)
-
         except Exception as e:
             logger.error(f"Error while trying to notify users without auth: {e}", exc_info=True)
 
 
 @tasks.loop(hours=1)
 async def cleanup_old_notifications(action_lock):
-    """Delete notifications older than 4 weeks."""
+    """Delete notifications older than 2 days."""
     async with action_lock:
         try:
             threshold = datetime.now(UTC) - timedelta(days=2)
