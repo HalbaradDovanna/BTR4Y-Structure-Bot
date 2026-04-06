@@ -56,37 +56,65 @@ class BaseModel(Model):
 
 
 class User(BaseModel):
-    user_id = CharField(primary_key=True)
+    """Represents one Discord user in one specific guild.
+    The same Discord user in two different guilds = two separate User rows,
+    each with their own characters, callback channel, and settings.
+    """
+    user_id = CharField()
+    guild_id = CharField()
     callback_channel_id = CharField()
     # Role ID to ping when a structure is attacked. NULL = @everyone.
     ping_role_id = CharField(null=True)
-    # Single persistent fuel board message per user.
+    # Single persistent fuel board message per user+guild.
     fuel_board_message_id = CharField(null=True)
     fuel_board_channel_id = CharField(null=True)
 
+    class Meta:
+        # Composite primary key: same user can exist in multiple guilds
+        primary_key = CompositeKey('user_id', 'guild_id')
+
     def __repr__(self):
-        return f"User(user_id={self.user_id}, callback_channel_id={self.callback_channel_id})"
+        return f"User(user_id={self.user_id}, guild_id={self.guild_id}, callback_channel_id={self.callback_channel_id})"
 
     def __str__(self):
-        return f"User {self.user_id}"
+        return f"User {self.user_id} (guild {self.guild_id})"
 
 
 class Character(BaseModel):
-    character_id = CharField(primary_key=True)
+    character_id = CharField()
     corporation_id = CharField()
     user = ForeignKeyField(User, backref='characters')
     token = TextField()
 
+    class Meta:
+        # A character can exist once per user+guild combination
+        primary_key = CompositeKey('character_id', 'user_id', 'guild_id')
+        indexes = (
+            (('character_id', 'user_id', 'guild_id'), True),
+        )
+
+    @property
+    def user_id(self):
+        return self.user.user_id
+
+    @property
+    def guild_id(self):
+        return self.user.guild_id
+
     def __repr__(self):
-        return f"Character(character_id={self.character_id}, corporation_id{self.corporation_id}, user_id={self.user.user_id}, token={self.token})"
+        return f"Character(character_id={self.character_id}, corporation_id={self.corporation_id}, user={self.user})"
 
     def __str__(self):
         return f"Character(character_id={self.character_id}, corporation_id={self.corporation_id} user={self.user})"
 
 
 class Challenge(BaseModel):
-    user = ForeignKeyField(User, backref='challenges')
+    user_id = CharField()
+    guild_id = CharField()
     state = CharField()
+
+    class Meta:
+        primary_key = CompositeKey('user_id', 'guild_id')
 
 
 class Notification(BaseModel):
@@ -114,9 +142,12 @@ def initialize_database():
         db.create_tables([User, Character, Challenge, Notification, Structure, Migration])
 
         # Safe migrations — add new columns without dropping existing data
-        _safe_add_column(User, 'ping_role_id',          'VARCHAR(255)')
-        _safe_add_column(User, 'fuel_board_message_id', 'VARCHAR(255)')
-        _safe_add_column(User, 'fuel_board_channel_id', 'VARCHAR(255)')
+        _safe_add_column(User,      'ping_role_id',          'VARCHAR(255)')
+        _safe_add_column(User,      'fuel_board_message_id', 'VARCHAR(255)')
+        _safe_add_column(User,      'fuel_board_channel_id', 'VARCHAR(255)')
+        _safe_add_column(User,      'guild_id',              'VARCHAR(255)')
+        _safe_add_column(Character, 'guild_id',              'VARCHAR(255)')
+        _safe_add_column(Challenge, 'guild_id',              'VARCHAR(255)')
 
 
 def _safe_add_column(model, column_name: str, column_type: str):
