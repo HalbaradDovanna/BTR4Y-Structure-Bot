@@ -12,7 +12,6 @@ from models import Character, User, Notification
 
 logger = logging.getLogger('discord.timer.relay')
 
-# Scheduling
 NOTIFICATION_CACHE_TIME = 600
 NOTIFICATION_PHASES = 12
 
@@ -60,11 +59,20 @@ async def notification_pings(action_lock, preston, bot):
     logger.debug(f"Running notification_pings in phase {notification_phase}.")
 
     async for character in schedule_characters(action_lock, notification_phase, NOTIFICATION_PHASES):
+        # Fetch the User object for this character
+        user = User.get_or_none(
+            (User.user_id == character.user_id) &
+            (User.guild_id == character.guild_id)
+        )
+        if user is None:
+            logger.warning(f"No user found for character {character}, skipping.")
+            continue
+
         try:
             try:
                 authed_preston = await preston.authenticate_from_token(character.token)
             except aiohttp.ClientResponseError as exp:
-                await handle_auth_error(character, bot, character.user, preston, exp)
+                await handle_auth_error(character, bot, user, preston, exp)
                 continue
             try:
                 response = await authed_preston.get_op(
@@ -74,11 +82,10 @@ async def notification_pings(action_lock, preston, bot):
             except aiohttp.ClientResponseError as exp:
                 await handle_notification_error(character, exp)
                 continue
-        except aiohttp.ClientConnectionError as exp:
+        except aiohttp.ClientConnectionError:
             if not is_server_downtime_now(extended=True):
                 logger.warning(
-                    f"notification_pings information gathering got a ClientConnectionError"
-                    f" for {character}, skipping..."
+                    f"notification_pings got a ClientConnectionError for {character}, skipping..."
                 )
         except Exception as e:
             logger.error(
@@ -89,12 +96,13 @@ async def notification_pings(action_lock, preston, bot):
             try:
                 for notification in reversed(response):
                     await send_notification_message(
-                        notification, bot, character.user, authed_preston, identifier=str(character)
+                        notification, bot, user, authed_preston, identifier=str(character)
                     )
             except Exception as e:
                 logger.error(
                     f"notification_pings information sending got an unfamiliar exception for {character}: {e}.",
-                    exc_info=True)
+                    exc_info=True
+                )
 
 
 @tasks.loop(seconds=STATUS_CACHE_TIME // STATUS_PHASES + 1)
@@ -104,15 +112,23 @@ async def status_pings(action_lock, preston, bot):
     status_phase = (status_phase + 1) % STATUS_PHASES
     logger.debug(f"Running status_pings in phase {status_phase}.")
 
-    # Collect all structures per user so we can build one combined fuel board
+    # Key: "user_id:guild_id" → list of structure dicts
     user_structures: dict[str, list[dict]] = collections.defaultdict(list)
 
     async for character in schedule_characters(action_lock, status_phase, STATUS_PHASES):
+        user = User.get_or_none(
+            (User.user_id == character.user_id) &
+            (User.guild_id == character.guild_id)
+        )
+        if user is None:
+            logger.warning(f"No user found for character {character}, skipping.")
+            continue
+
         try:
             try:
                 authed_preston = await preston.authenticate_from_token(character.token)
             except aiohttp.ClientResponseError as exp:
-                await handle_auth_error(character, bot, character.user, preston, exp)
+                await handle_auth_error(character, bot, user, preston, exp)
                 continue
             try:
                 response = await authed_preston.get_op(
@@ -120,13 +136,12 @@ async def status_pings(action_lock, preston, bot):
                     corporation_id=character.corporation_id,
                 )
             except aiohttp.ClientResponseError as exp:
-                await handle_structure_error(character, authed_preston, exp, bot=bot, user=character.user)
+                await handle_structure_error(character, authed_preston, exp, bot=bot, user=user)
                 continue
         except aiohttp.ClientConnectionError:
             if not is_server_downtime_now(extended=True):
                 logger.warning(
-                    f"status_pings information gathering got a ClientConnectionError"
-                    f" for {character}, skipping..."
+                    f"status_pings got a ClientConnectionError for {character}, skipping..."
                 )
             continue
         except Exception as e:
@@ -137,21 +152,24 @@ async def status_pings(action_lock, preston, bot):
             continue
 
         try:
+            board_key = f"{character.user_id}:{character.guild_id}"
             for structure in response:
-                # Handle state-change alerts and fuel threshold alerts
-                await send_structure_message(structure, bot, character.user, identifier=str(character))
-                # Accumulate structures for this user's fuel board
-                user_structures[character.user.user_id].append(structure)
+                await send_structure_message(structure, bot, user, identifier=str(character))
+                user_structures[board_key].append(structure)
         except Exception as e:
             logger.error(
                 f"status_pings information sending got an unfamiliar exception for {character}: {e}.",
                 exc_info=True
             )
 
-    # ── Update one fuel board message per user ────────────────────────────────
-    for user_id, structures in user_structures.items():
+    # ── Update one fuel board message per user+guild ──────────────────────────
+    for board_key, structures in user_structures.items():
         try:
-            user = User.get_or_none(User.user_id == user_id)
+            user_id, guild_id = board_key.split(":", 1)
+            user = User.get_or_none(
+                (User.user_id == user_id) &
+                (User.guild_id == guild_id)
+            )
             if user is None:
                 continue
 
@@ -160,7 +178,7 @@ async def status_pings(action_lock, preston, bot):
                 bot, user, board_text,
                 stored_message_id=user.fuel_board_message_id,
                 stored_channel_id=user.fuel_board_channel_id,
-                identifier=f"fuel_board:{user_id}",
+                identifier=f"fuel_board:{board_key}",
             )
             if msg_id and (
                 msg_id != user.fuel_board_message_id or
@@ -171,7 +189,7 @@ async def status_pings(action_lock, preston, bot):
                 user.save()
         except Exception as e:
             logger.error(
-                f"status_pings fuel board update failed for user {user_id}: {e}.",
+                f"status_pings fuel board update failed for {board_key}: {e}.",
                 exc_info=True
             )
 
@@ -182,13 +200,16 @@ async def no_auth_pings(action_lock, bot):
     async with action_lock:
         try:
             for user in User.select():
-                if not user.characters.exists():
+                has_chars = Character.select().where(
+                    (Character.user_id == user.user_id) &
+                    (Character.guild_id == user.guild_id)
+                ).exists()
+                if not has_chars:
                     warning_text = (
                         "### WARNING\n"
                         f"<@{user.user_id}>, your discord account is linked to timer-bot, but you have not authorized any characters.\n"
-                        f"This means you will not get any notifications about reinforced structures or fuel"
-                        f"- If you do not intend to use this bot anymore, write `/revoke` to de-register.\n"
-                        f"- Otherwise add some character with `/auth`"
+                        "- If you do not intend to use this bot anymore, write `/revoke` to de-register.\n"
+                        "- Otherwise add some character with `/auth`"
                     )
                     await send_background_message(bot, user, warning_text)
         except Exception as e:

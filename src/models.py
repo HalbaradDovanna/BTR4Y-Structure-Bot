@@ -5,13 +5,6 @@ from playhouse.pool import PooledPostgresqlDatabase
 
 
 def get_database():
-    """Get database instance based on environment configuration.
-
-    Priority:
-    1. DATABASE_URL — full connection string (Railway standard)
-    2. DB_HOST + individual DB_* vars — legacy explicit config
-    3. SQLite fallback for local dev
-    """
     database_url = os.getenv('DATABASE_URL')
     if database_url:
         from urllib.parse import urlparse
@@ -56,56 +49,48 @@ class BaseModel(Model):
 
 
 class User(BaseModel):
-    """Represents one Discord user in one specific guild.
-    The same Discord user in two different guilds = two separate User rows,
-    each with their own characters, callback channel, and settings.
-    """
+    """One row per (discord_user, guild). Same Discord user in two guilds = two rows."""
     user_id = CharField()
     guild_id = CharField()
     callback_channel_id = CharField()
-    # Role ID to ping when a structure is attacked. NULL = @everyone.
     ping_role_id = CharField(null=True)
-    # Single persistent fuel board message per user+guild.
     fuel_board_message_id = CharField(null=True)
     fuel_board_channel_id = CharField(null=True)
 
     class Meta:
-        # Composite primary key: same user can exist in multiple guilds
         primary_key = CompositeKey('user_id', 'guild_id')
 
     def __repr__(self):
-        return f"User(user_id={self.user_id}, guild_id={self.guild_id}, callback_channel_id={self.callback_channel_id})"
+        return f"User(user_id={self.user_id}, guild_id={self.guild_id})"
 
     def __str__(self):
         return f"User {self.user_id} (guild {self.guild_id})"
 
 
 class Character(BaseModel):
+    """One row per (character_id, guild_id). Same EVE char can exist in multiple guilds."""
     character_id = CharField()
+    guild_id = CharField()
     corporation_id = CharField()
-    user = ForeignKeyField(User, backref='characters')
+    # Store user_id directly rather than as a FK to avoid composite FK complexity
+    user_id = CharField()
     token = TextField()
 
     class Meta:
-        # A character can exist once per user+guild combination
-        primary_key = CompositeKey('character_id', 'user_id', 'guild_id')
-        indexes = (
-            (('character_id', 'user_id', 'guild_id'), True),
+        primary_key = CompositeKey('character_id', 'guild_id')
+
+    @property
+    def user(self):
+        return User.get(
+            (User.user_id == self.user_id) &
+            (User.guild_id == self.guild_id)
         )
 
-    @property
-    def user_id(self):
-        return self.user.user_id
-
-    @property
-    def guild_id(self):
-        return self.user.guild_id
-
     def __repr__(self):
-        return f"Character(character_id={self.character_id}, corporation_id={self.corporation_id}, user={self.user})"
+        return f"Character(character_id={self.character_id}, corporation_id={self.corporation_id}, user_id={self.user_id}, guild_id={self.guild_id})"
 
     def __str__(self):
-        return f"Character(character_id={self.character_id}, corporation_id={self.corporation_id} user={self.user})"
+        return f"Character(character_id={self.character_id}, corporation_id={self.corporation_id}, guild={self.guild_id})"
 
 
 class Challenge(BaseModel):
@@ -140,18 +125,16 @@ class Migration(BaseModel):
 def initialize_database():
     with db:
         db.create_tables([User, Character, Challenge, Notification, Structure, Migration])
-
-        # Safe migrations — add new columns without dropping existing data
         _safe_add_column(User,      'ping_role_id',          'VARCHAR(255)')
         _safe_add_column(User,      'fuel_board_message_id', 'VARCHAR(255)')
         _safe_add_column(User,      'fuel_board_channel_id', 'VARCHAR(255)')
         _safe_add_column(User,      'guild_id',              'VARCHAR(255)')
         _safe_add_column(Character, 'guild_id',              'VARCHAR(255)')
+        _safe_add_column(Character, 'user_id',               'VARCHAR(255)')
         _safe_add_column(Challenge, 'guild_id',              'VARCHAR(255)')
 
 
 def _safe_add_column(model, column_name: str, column_type: str):
-    """Add a column to an existing table if it doesn't already exist."""
     table = model._meta.table_name
     try:
         if isinstance(db, PooledPostgresqlDatabase):

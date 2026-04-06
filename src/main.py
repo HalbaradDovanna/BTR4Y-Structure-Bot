@@ -64,8 +64,8 @@ def get_guild_user(interaction: Interaction):
 async def log_statistics():
     try:
         for user in User.select():
-            if user.characters.exists():
-                character_list = ", ".join([c.character_id for c in user.characters.select()])
+            if Character.select().where((Character.user_id == user.user_id) & (Character.guild_id == user.guild_id)).exists():
+                character_list = ", ".join([c.character_id for c in Character.select().where((Character.user_id == user.user_id) & (Character.guild_id == user.guild_id))])
             else:
                 character_list = "No characters"
             logger.info(
@@ -194,7 +194,7 @@ async def characters(interaction: Interaction):
     character_names = []
     user, _ = get_guild_user(interaction)
     if user:
-        for character in user.characters:
+        for character in Character.select().where((Character.user_id == user.user_id) & (Character.guild_id == user.guild_id)):
             try:
                 authed_preston = await base_preston.authenticate_from_token(character.token)
             except aiohttp.ClientResponseError as exp:
@@ -228,7 +228,7 @@ async def revoke(interaction: Interaction, character_name: str | None = None):
         return
 
     if character_name is None:
-        for character in user.characters.select():
+        for character in Character.select().where((Character.user_id == user.user_id) & (Character.guild_id == user.guild_id)):
             character.delete_instance()
         user.delete_instance()
         await interaction.followup.send("Successfully revoked access to all your characters.", ephemeral=True)
@@ -244,7 +244,7 @@ async def revoke(interaction: Interaction, character_name: str | None = None):
             await interaction.followup.send(f"Args `{character_name}` could not be parsed or looked up.", ephemeral=True)
             return
 
-    character = user.characters.select().where(Character.character_id == str(character_id)).first()
+    character = Character.select().where((Character.user_id == user.user_id) & (Character.guild_id == user.guild_id)).where(Character.character_id == str(character_id)).first()
     if character:
         character.delete_instance()
         await interaction.followup.send(f"Successfully removed {character_name}.", ephemeral=True)
@@ -261,7 +261,7 @@ async def info(interaction: Interaction):
     structures_info = {}
     user, _ = get_guild_user(interaction)
     if user:
-        for character in user.characters:
+        for character in Character.select().where((Character.user_id == user.user_id) & (Character.guild_id == user.guild_id)):
             try:
                 authed_preston = await base_preston.authenticate_from_token(character.token)
             except aiohttp.ClientResponseError as exp:

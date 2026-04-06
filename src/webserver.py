@@ -110,13 +110,14 @@ async def webserver(bot, preston: Preston):
         try:
             character = Character.get(
                 (Character.character_id == str(character_id)) &
-                (Character.user == user)
+                (Character.guild_id == user.guild_id)
             )
             created = False
         except Character.DoesNotExist:
             character = Character.create(
                 character_id=str(character_id),
-                user=user,
+                guild_id=user.guild_id,
+                user_id=user.user_id,
                 token=authed_preston.refresh_token,
                 corporation_id=str(corporation_id)
             )
