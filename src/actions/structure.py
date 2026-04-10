@@ -127,8 +127,6 @@ async def send_structure_message(structure, bot, user, identifier="<no identifie
     )
 
     if created:
-        message = f"Structure {structure.get('name')} newly found in state:\n{structure_info_text(structure)}"
-        await send_background_message(bot, user, message, identifier)
         return
 
     # State change alert
