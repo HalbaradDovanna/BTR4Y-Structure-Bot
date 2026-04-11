@@ -18,8 +18,6 @@ COLOURS = {
     "StructureLostArmor":     discord.Colour.dark_orange(),
     "StructureUnanchoring":   discord.Colour.yellow(),
     "StructureWentLowPower":  discord.Colour.yellow(),
-    "StructureWentHighPower": discord.Colour.green(),
-    "StructureOnline":        discord.Colour.green(),
     "OrbitalAttacked":        discord.Colour.red(),
     "OrbitalReinforced":      discord.Colour.orange(),
 }
@@ -31,8 +29,6 @@ TITLES = {
     "StructureLostArmor":     "🔴 Structure Lost Armor",
     "StructureUnanchoring":   "📦 Structure Unanchoring",
     "StructureWentLowPower":  "🔋 Structure Went Low Power",
-    "StructureWentHighPower": "✅ Structure Went High Power",
-    "StructureOnline":        "✅ Structure Online",
     "OrbitalAttacked":        "🚨 POCO Under Attack!",
     "OrbitalReinforced":      "⚠️ POCO Reinforced",
 }
