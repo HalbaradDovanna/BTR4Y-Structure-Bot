@@ -1,28 +1,50 @@
 import aiohttp
 import dateutil.parser
+import discord
 import logging
 from datetime import datetime, timezone, timedelta
 from preston import Preston
 
-from messaging import send_background_message
+from messaging import send_background_embed
 from models import Notification
 
-# Configure the logger
 logger = logging.getLogger('discord.timer.notification')
 logger.setLevel(logging.INFO)
 
+# ── Embed colours per notification type ──────────────────────────────────────
+COLOURS = {
+    "StructureUnderAttack":   discord.Colour.red(),
+    "StructureLostShields":   discord.Colour.orange(),
+    "StructureLostArmor":     discord.Colour.dark_orange(),
+    "StructureUnanchoring":   discord.Colour.yellow(),
+    "StructureWentLowPower":  discord.Colour.yellow(),
+
+    "OrbitalAttacked":        discord.Colour.red(),
+    "OrbitalReinforced":      discord.Colour.orange(),
+}
+
+# ── Human-readable titles ─────────────────────────────────────────────────────
+TITLES = {
+    "StructureUnderAttack":   "🚨 Structure Under Attack!",
+    "StructureLostShields":   "⚠️ Structure Lost Shields",
+    "StructureLostArmor":     "🔴 Structure Lost Armor",
+    "StructureUnanchoring":   "📦 Structure Unanchoring",
+    "StructureWentLowPower":  "🔋 Structure Went Low Power",
+
+    "OrbitalAttacked":        "🚨 POCO Under Attack!",
+    "OrbitalReinforced":      "⚠️ POCO Reinforced",
+}
+
 
 def get_structure_id(notification: dict) -> int | None:
-    """returns a structure id from the notification or none if no structure_id can be found"""
-    for line in notification.get("text").split("\n"):
+    for line in notification.get("text", "").split("\n"):
         if "structureID:" in line:
             return int(line.split(" ")[2])
     return None
 
 
 def get_attacker_character_id(notification: dict) -> int | None:
-    """returns a character_id from the notification or None if no character_id can be found"""
-    for line in notification.get("text").split("\n"):
+    for line in notification.get("text", "").split("\n"):
         if "charID:" in line:
             return int(line.split(" ")[1])
         if "aggressorID:" in line:
@@ -30,24 +52,8 @@ def get_attacker_character_id(notification: dict) -> int | None:
     return None
 
 
-async def make_attribution(notification: dict, preston: Preston) -> str:
-    character_id = get_attacker_character_id(notification)
-    if character_id is None:
-        return ""
-
-    try:
-        character_name = (await preston.get_op(
-            'get_characters_character_id',
-            character_id=str(character_id)
-        )).get("name", "Unknown")
-        return f" by [{character_name}](https://zkillboard.com/character/{character_id}/)"
-    except aiohttp.ClientResponseError:
-        return ""
-
-
 def get_reinforce_exit_time(notification: dict) -> datetime | None:
-    """returns a character_id from the notification or None if no character_id can be found"""
-    for line in notification.get("text").split("\n"):
+    for line in notification.get("text", "").split("\n"):
         if "reinforceExitTime:" in line:
             filetime = int(line.split(" ")[1])
             unix_epoch_start = datetime(1601, 1, 1)
@@ -55,91 +61,133 @@ def get_reinforce_exit_time(notification: dict) -> datetime | None:
     return None
 
 
-def poco_timer_text(notification: dict) -> str:
-    state_expires = get_reinforce_exit_time(notification)
-    return f"**Timer:** <t:{int(state_expires.timestamp())}> (<t:{int(state_expires.timestamp())}:R>) ({state_expires} ET)\n"
+async def get_attacker_info(notification: dict, preston: Preston) -> tuple[str, str | None]:
+    """Returns (attacker_display_name, zkillboard_url_or_None)"""
+    character_id = get_attacker_character_id(notification)
+    if character_id is None:
+        return "Unknown", None
+    try:
+        name = (await preston.get_op(
+            'get_characters_character_id',
+            character_id=str(character_id)
+        )).get("name", "Unknown")
+        return name, f"https://zkillboard.com/character/{character_id}/"
+    except aiohttp.ClientResponseError:
+        return "Unknown", None
+
+
+async def get_poco_name(notification: dict, preston: Preston) -> str:
+    planet_id = None
+    for line in notification.get("text", "").split("\n"):
+        if "planetID:" in line:
+            planet_id = line.split(" ")[1]
+    if planet_id is not None:
+        try:
+            return (await preston.get_op("get_universe_planets_planet_id", planet_id=planet_id)).get("name", "Unknown POCO")
+        except Exception:
+            pass
+    return "Unknown POCO"
 
 
 def ping_text(user) -> str:
-    """Returns the appropriate ping string for a user.
-
-    Uses the user's configured role if set, otherwise falls back to @everyone.
-    Set via the /setrole command.
-    """
+    """Returns the appropriate ping string for a user."""
     role_id = getattr(user, 'ping_role_id', None)
     if role_id:
         return f"<@&{role_id}>"
     return "@everyone"
 
 
-async def structure_notification_text(notification: dict, authed_preston: Preston, user=None) -> str:
-    """Returns a human-readable message of a structure notification"""
-    ping = ping_text(user) if user is not None else "@everyone"
+def is_poco_notification(notification: dict) -> bool:
+    return "Orbital" in notification.get('type', '')
 
+
+def is_structure_notification(notification: dict) -> bool:
+    return "Structure" in notification.get('type', '')
+
+
+async def build_structure_embed(notification: dict, authed_preston: Preston, user=None) -> discord.Embed | None:
+    """Build a rich embed for a structure notification. Returns None if not a handled type."""
+    notif_type = notification.get('type')
+    title = TITLES.get(notif_type)
+    if not title:
+        return None
+
+    colour = COLOURS.get(notif_type, discord.Colour.light_grey())
+
+    # Resolve structure name
     try:
         structure_name = (await authed_preston.get_op(
             "get_universe_structures_structure_id",
             structure_id=str(get_structure_id(notification)),
-        )).get("name")
+        )).get("name", "Unknown Structure")
     except Exception:
         structure_name = f"Structure {get_structure_id(notification)}"
 
-    match notification.get('type'):
-        case "StructureLostArmor":
-            return f"{ping} Structure {structure_name} has lost its armor!\n"
-        case "StructureLostShields":
-            return f"{ping} Structure {structure_name} has lost its shields!\n"
-        case "StructureUnanchoring":
-            return f"{ping} Structure {structure_name} is now unanchoring!\n"
-        case "StructureUnderAttack":
-            return f"{ping} Structure {structure_name} is under attack{await make_attribution(notification, authed_preston)}!\n"
-        case "StructureWentHighPower":
-            return f"{ping} Structure {structure_name} is now high power!\n"
-        case "StructureWentLowPower":
-            return f"{ping} Structure {structure_name} is now low power!\n"
-        case "StructureOnline":
-            return f"{ping} Structure {structure_name} went online!\n"
-        case _:
-            return ""
+    embed = discord.Embed(title=title, colour=colour)
+    embed.add_field(name="Structure", value=structure_name, inline=False)
+
+    # Attacker info (only relevant for attack notifications)
+    if notif_type in ("StructureUnderAttack",):
+        attacker_name, zkill_url = await get_attacker_info(notification, authed_preston)
+        attacker_value = f"[{attacker_name}]({zkill_url})" if zkill_url else attacker_name
+        embed.add_field(name="Attacker", value=attacker_value, inline=False)
+
+    # Reinforce timer
+    if notif_type in ("StructureLostShields", "StructureLostArmor"):
+        exit_time = get_reinforce_exit_time(notification)
+        if exit_time:
+            ts = int(exit_time.replace(tzinfo=timezone.utc).timestamp())
+            embed.add_field(
+                name="Reinforce Exit",
+                value=f"<t:{ts}:F> • <t:{ts}:R>",
+                inline=False
+            )
+
+    # Timestamp
+    timestamp = dateutil.parser.isoparse(notification.get("timestamp"))
+    ts = int(timestamp.timestamp())
+    embed.add_field(name="Notified", value=f"<t:{ts}:F> • <t:{ts}:R>", inline=False)
+
+    return embed
 
 
-async def get_poco_name(notification: dict, preston: Preston) -> str:
-    """returns a structure id from the notification or none if no structure_id can be found"""
-    planet_id = None
-    for line in notification.get("text").split("\n"):
-        if "planetID:" in line:
-            planet_id = line.split(" ")[1]
+async def build_poco_embed(notification: dict, preston: Preston, user=None) -> discord.Embed | None:
+    """Build a rich embed for a POCO notification. Returns None if not a handled type."""
+    notif_type = notification.get('type')
+    title = TITLES.get(notif_type)
+    if not title:
+        return None
 
-    if planet_id is not None:
-        return (await preston.get_op("get_universe_planets_planet_id", planet_id=planet_id)).get("name")
-    return "Unknown Poco"
+    colour = COLOURS.get(notif_type, discord.Colour.light_grey())
+    poco_name = await get_poco_name(notification, preston)
 
+    embed = discord.Embed(title=title, colour=colour)
+    embed.add_field(name="POCO", value=poco_name, inline=False)
 
-async def poco_notification_text(notification: dict, preston: Preston, user=None) -> str:
-    """Returns a human-readable message of a poco notification"""
-    ping = ping_text(user) if user is not None else "@everyone"
+    if notif_type == "OrbitalAttacked":
+        attacker_name, zkill_url = await get_attacker_info(notification, preston)
+        attacker_value = f"[{attacker_name}]({zkill_url})" if zkill_url else attacker_name
+        embed.add_field(name="Attacker", value=attacker_value, inline=False)
 
-    match notification.get('type'):
-        case "OrbitalAttacked":
-            return f"{ping} {await get_poco_name(notification, preston)} is under attack{await make_attribution(notification, preston)}!\n"
-        case "OrbitalReinforced":
-            return f"{ping} {await get_poco_name(notification, preston)} has been reinforced{await make_attribution(notification, preston)}!\n{poco_timer_text(notification)}\n"
-        case _:
-            return ""
+    if notif_type == "OrbitalReinforced":
+        exit_time = get_reinforce_exit_time(notification)
+        if exit_time:
+            ts = int(exit_time.replace(tzinfo=timezone.utc).timestamp())
+            embed.add_field(
+                name="Reinforce Exit",
+                value=f"<t:{ts}:F> • <t:{ts}:R>",
+                inline=False
+            )
 
+    timestamp = dateutil.parser.isoparse(notification.get("timestamp"))
+    ts = int(timestamp.timestamp())
+    embed.add_field(name="Notified", value=f"<t:{ts}:F> • <t:{ts}:R>", inline=False)
 
-def is_poco_notification(notification: dict) -> bool:
-    """returns true if a notification is about a poco"""
-    return "Orbital" in notification.get('type')
-
-
-def is_structure_notification(notification: dict) -> bool:
-    """returns true if a notification is about a structure"""
-    return "Structure" in notification.get('type')
+    return embed
 
 
 async def send_notification_message(notification, bot, user, authed_preston, identifier="<no identifier>"):
-    """For a notification from ESI take action and inform a user if required"""
+    """For a notification from ESI take action and inform a user if required."""
     notification_id = notification.get("notification_id")
     timestamp = dateutil.parser.isoparse(notification.get("timestamp"))
 
@@ -148,15 +196,20 @@ async def send_notification_message(notification, bot, user, authed_preston, ide
         return
 
     notif, created = Notification.get_or_create(notification_id=notification_id, timestamp=timestamp)
+    ping = ping_text(user) if user is not None else "@everyone"
 
     if is_structure_notification(notification):
-        if not notif.sent and len(message := await structure_notification_text(notification, authed_preston, user=user)) > 0:
-            if await send_background_message(bot, user, message, identifier):
-                notif.sent = True
-                notif.save()
+        if not notif.sent:
+            embed = await build_structure_embed(notification, authed_preston, user=user)
+            if embed is not None:
+                if await send_background_embed(bot, user, embed, ping=ping, identifier=identifier):
+                    notif.sent = True
+                    notif.save()
 
     if is_poco_notification(notification):
-        if not notif.sent and len(message := await poco_notification_text(notification, authed_preston, user=user)) > 0:
-            if await send_background_message(bot, user, message, identifier):
-                notif.sent = True
-                notif.save()
+        if not notif.sent:
+            embed = await build_poco_embed(notification, authed_preston, user=user)
+            if embed is not None:
+                if await send_background_embed(bot, user, embed, ping=ping, identifier=identifier):
+                    notif.sent = True
+                    notif.save()
