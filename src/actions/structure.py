@@ -1,3 +1,4 @@
+import discord
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -61,45 +62,44 @@ def structure_info_text(structure: dict) -> str:
     return msg
 
 
-def fuel_board_row(structure: dict) -> tuple[datetime | None, str]:
-    """Returns (fuel_expires_datetime, formatted_row_string) for one structure.
-    Used to build the combined fuel board. fuel_expires is None for sorting
-    (out-of-fuel structures sort to the top).
+def fuel_board_row(structure: dict) -> tuple[datetime | None, tuple[str, str]]:
+    """Returns (fuel_expires_datetime, (field_name, field_value)) for one structure.
+    Used to build the combined fuel board embed.
+    Out-of-fuel structures sort to the top.
     """
     name = structure.get('name', 'Unknown')
     state = structure.get('state', 'unknown')
     fuel_expires = to_datetime(structure.get('fuel_expires'))
 
     if fuel_expires is not None:
-        row = (
-            f"**{name}**\n"
-            f"<t:{int(fuel_expires.timestamp())}:F> • <t:{int(fuel_expires.timestamp())}:R>"
-        )
+        value = f"<t:{int(fuel_expires.timestamp())}:F> • <t:{int(fuel_expires.timestamp())}:R>"
     elif state in ["anchoring", "anchor_vulnerable"]:
-        row = f"**{name}**\nNot fueled yet (anchoring)"
+        value = "Not fueled yet (anchoring)"
     else:
-        row = f"**{name}**\n⚠️ Out of fuel!"
+        value = "⚠️ Out of fuel!"
 
-    return fuel_expires, row
+    return fuel_expires, (name, value)
 
 
-def build_fuel_board(structures: list[dict]) -> str:
-    """Builds a single combined fuel board message for all structures,
-    sorted soonest expiry first."""
+def build_fuel_board_embed(structures: list[dict]) -> discord.Embed:
+    """Builds a single Discord embed listing all structures sorted by fuel expiry."""
     rows = []
     for structure in structures:
-        expires, row = fuel_board_row(structure)
-        rows.append((expires, row))
+        expires, field = fuel_board_row(structure)
+        rows.append((expires, field))
 
     # Sort: out-of-fuel (None) first, then soonest expiry
     rows.sort(key=lambda x: x[0] if x[0] is not None else datetime.min.replace(tzinfo=timezone.utc))
 
-    lines = ["## ⛽ Fuel Status Board"]
-    for _, row in rows:
-        lines.append(row)
-        lines.append("")  # blank line between entries
+    embed = discord.Embed(
+        title="⛽ Fuel Status Board",
+        colour=discord.Colour.blue(),
+    )
 
-    return "\n".join(lines).strip()
+    for _, (name, value) in rows:
+        embed.add_field(name=name, value=value, inline=False)
+
+    return embed
 
 
 def next_fuel_warning(structure: dict) -> int:
@@ -115,8 +115,8 @@ def next_fuel_warning(structure: dict) -> int:
 
 async def send_structure_message(structure, bot, user, identifier="<no identifier>"):
     """Handle state changes and fuel alerts for a single structure.
-    Does NOT post the fuel board — that is handled by update_fuel_board()
-    in relay.py after all structures for a user have been collected.
+    Does NOT post the fuel board — that is handled in relay.py after all
+    structures for a user have been collected.
     """
     structure_db, created = Structure.get_or_create(
         structure_id=structure.get('structure_id'),
@@ -127,8 +127,6 @@ async def send_structure_message(structure, bot, user, identifier="<no identifie
     )
 
     if created:
-        message = f"Structure {structure.get('name')} newly found in state:\n{structure_info_text(structure)}"
-        await send_background_message(bot, user, message, identifier)
         return
 
     # State change alert
