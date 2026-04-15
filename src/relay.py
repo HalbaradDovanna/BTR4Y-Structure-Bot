@@ -6,8 +6,8 @@ from discord.ext import tasks
 
 from actions.esi import handle_auth_error, handle_structure_error, handle_notification_error
 from actions.notification import send_notification_message
-from actions.structure import send_structure_message, build_fuel_board
-from messaging import send_background_message, send_or_edit_persistent_message
+from actions.structure import send_structure_message, build_fuel_board_embed
+from messaging import send_background_message, send_or_edit_persistent_embed
 from models import Character, User, Notification
 
 logger = logging.getLogger('discord.timer.relay')
@@ -173,9 +173,9 @@ async def status_pings(action_lock, preston, bot):
             if user is None:
                 continue
 
-            board_text = build_fuel_board(structures)
-            msg_id, chan_id = await send_or_edit_persistent_message(
-                bot, user, board_text,
+            board_embed = build_fuel_board_embed(structures)
+            msg_id, chan_id = await send_or_edit_persistent_embed(
+                bot, user, board_embed,
                 stored_message_id=user.fuel_board_message_id,
                 stored_channel_id=user.fuel_board_channel_id,
                 identifier=f"fuel_board:{board_key}",

@@ -178,3 +178,61 @@ async def send_or_edit_persistent_message(bot, user, message: str, stored_messag
         )
         user_disconnected_count[user] += 1
         return None, None
+
+
+async def send_or_edit_persistent_embed(bot, user, embed, stored_message_id: str | None,
+                                        stored_channel_id: str | None,
+                                        identifier="<no identifier>"):
+    """Post a new embed OR edit the existing one in-place for persistent displays.
+
+    Returns (message_id, channel_id) of the live message, or (None, None) on failure.
+    """
+    if stored_message_id and stored_channel_id:
+        try:
+            channel = await bot.fetch_channel(int(stored_channel_id))
+            existing = await channel.fetch_message(int(stored_message_id))
+            await existing.edit(content=None, embed=embed)
+            logger.debug(f"Edited persistent embed {stored_message_id} for {identifier}")
+            return stored_message_id, stored_channel_id
+        except (discord.errors.NotFound, discord.errors.Forbidden, discord.errors.HTTPException) as e:
+            logger.info(
+                f"Could not edit persistent embed {stored_message_id} for {identifier} ({e}), "
+                f"will post a new one."
+            )
+        except Exception as e:
+            logger.warning(
+                f"Unexpected error editing persistent embed for {identifier}: {e}", exc_info=True
+            )
+
+    result = await get_channel(user, bot)
+    if result is None:
+        user_disconnected_count[user] += 1
+        return None, None
+
+    channel, is_emergency_dm = result
+    try:
+        if is_emergency_dm:
+            await channel.send(
+                "### WARNING\n"
+                f"<@{user.user_id}>, timer-bot could not reach your callback channel and fell back to DMs. "
+                "Use `/callback` in a server channel to fix this."
+            )
+        sent = await channel.send(embed=embed)
+        user_disconnected_count[user] = 0
+        logger.debug(f"Posted new persistent embed {sent.id} for {identifier}")
+        return str(sent.id), str(channel.id)
+    except (discord.errors.Forbidden, discord.errors.NotFound, discord.errors.HTTPException,
+            discord.errors.InvalidData):
+        logger.info(
+            f"send_or_edit_persistent_embed to {user} failed (discord permissions). "
+            f"Identifier: {identifier}"
+        )
+        user_disconnected_count[user] += 1
+        return None, None
+    except Exception as e:
+        logger.warning(
+            f"send_or_edit_persistent_embed to {user} failed (unknown). "
+            f"Identifier: {identifier}: {e}", exc_info=True
+        )
+        user_disconnected_count[user] += 1
+        return None, None
