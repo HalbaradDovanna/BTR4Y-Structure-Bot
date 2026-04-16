@@ -6,8 +6,8 @@ from discord.ext import tasks
 
 from actions.esi import handle_auth_error, handle_structure_error, handle_notification_error
 from actions.notification import send_notification_message
-from actions.structure import send_structure_message, build_fuel_board_embed
-from messaging import send_background_message, send_or_edit_persistent_embed
+from actions.structure import send_structure_message, build_fuel_board_embeds
+from messaging import send_background_message, send_or_edit_persistent_embeds
 from models import Character, User, Notification
 
 logger = logging.getLogger('discord.timer.relay')
@@ -173,18 +173,20 @@ async def status_pings(action_lock, preston, bot):
             if user is None:
                 continue
 
-            board_embed = build_fuel_board_embed(structures)
-            msg_id, chan_id = await send_or_edit_persistent_embed(
-                bot, user, board_embed,
-                stored_message_id=user.fuel_board_message_id,
+            board_embeds = build_fuel_board_embeds(structures)
+            # fuel_board_message_id stores comma-separated IDs for multi-page boards
+            existing_ids = user.fuel_board_message_id.split(",") if user.fuel_board_message_id else []
+            msg_ids, chan_id = await send_or_edit_persistent_embeds(
+                bot, user, board_embeds,
+                stored_message_ids=existing_ids,
                 stored_channel_id=user.fuel_board_channel_id,
                 identifier=f"fuel_board:{board_key}",
             )
-            if msg_id and (
-                msg_id != user.fuel_board_message_id or
+            if msg_ids and (
+                msg_ids != user.fuel_board_message_id or
                 chan_id != user.fuel_board_channel_id
             ):
-                user.fuel_board_message_id = msg_id
+                user.fuel_board_message_id = msg_ids
                 user.fuel_board_channel_id = chan_id
                 user.save()
         except Exception as e:

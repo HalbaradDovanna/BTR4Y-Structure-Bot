@@ -180,29 +180,18 @@ async def send_or_edit_persistent_message(bot, user, message: str, stored_messag
         return None, None
 
 
-async def send_or_edit_persistent_embed(bot, user, embed, stored_message_id: str | None,
-                                        stored_channel_id: str | None,
-                                        identifier="<no identifier>"):
-    """Post a new embed OR edit the existing one in-place for persistent displays.
+async def send_or_edit_persistent_embeds(bot, user, embeds: list, stored_message_ids: list[str] | None,
+                                         stored_channel_id: str | None,
+                                         identifier="<no identifier>"):
+    """Post or edit a list of embeds as persistent messages (one message per embed).
 
-    Returns (message_id, channel_id) of the live message, or (None, None) on failure.
+    Returns (message_ids_json, channel_id) where message_ids_json is a comma-separated
+    string of message IDs. Returns (None, None) on total failure.
     """
-    if stored_message_id and stored_channel_id:
-        try:
-            channel = await bot.fetch_channel(int(stored_channel_id))
-            existing = await channel.fetch_message(int(stored_message_id))
-            await existing.edit(content=None, embed=embed)
-            logger.debug(f"Edited persistent embed {stored_message_id} for {identifier}")
-            return stored_message_id, stored_channel_id
-        except (discord.errors.NotFound, discord.errors.Forbidden, discord.errors.HTTPException) as e:
-            logger.info(
-                f"Could not edit persistent embed {stored_message_id} for {identifier} ({e}), "
-                f"will post a new one."
-            )
-        except Exception as e:
-            logger.warning(
-                f"Unexpected error editing persistent embed for {identifier}: {e}", exc_info=True
-            )
+    import json
+
+    # Parse existing message IDs
+    existing_ids = stored_message_ids or []
 
     result = await get_channel(user, bot)
     if result is None:
@@ -210,31 +199,62 @@ async def send_or_edit_persistent_embed(bot, user, embed, stored_message_id: str
         return None, None
 
     channel, is_emergency_dm = result
-    try:
-        if is_emergency_dm:
+
+    if is_emergency_dm:
+        try:
             await channel.send(
                 "### WARNING\n"
                 f"<@{user.user_id}>, timer-bot could not reach your callback channel and fell back to DMs. "
                 "Use `/callback` in a server channel to fix this."
             )
-        sent = await channel.send(embed=embed)
-        user_disconnected_count[user] = 0
-        logger.debug(f"Posted new persistent embed {sent.id} for {identifier}")
-        return str(sent.id), str(channel.id)
-    except (discord.errors.Forbidden, discord.errors.NotFound, discord.errors.HTTPException,
-            discord.errors.InvalidData) as e:
-        logger.warning(
-            f"send_or_edit_persistent_embed to {user} failed (discord error: {type(e).__name__}: {e}). "
-            f"Identifier: {identifier}",
-            exc_info=True
-        )
-        user_disconnected_count[user] += 1
-        return None, None
-    except Exception as e:
-        logger.warning(
-            f"send_or_edit_persistent_embed to {user} failed (unknown: {type(e).__name__}: {e}). "
-            f"Identifier: {identifier}",
-            exc_info=True
-        )
-        user_disconnected_count[user] += 1
-        return None, None
+        except Exception:
+            pass
+
+    new_ids = []
+    for i, embed in enumerate(embeds):
+        # Try to edit existing message at this index
+        if i < len(existing_ids) and existing_ids[i]:
+            try:
+                msg = await channel.fetch_message(int(existing_ids[i]))
+                await msg.edit(content=None, embed=embed)
+                new_ids.append(existing_ids[i])
+                logger.debug(f"Edited persistent embed {existing_ids[i]} [{i+1}/{len(embeds)}] for {identifier}")
+                continue
+            except (discord.errors.NotFound, discord.errors.Forbidden, discord.errors.HTTPException) as e:
+                logger.info(f"Could not edit embed {existing_ids[i]} for {identifier} ({e}), posting new.")
+            except Exception as e:
+                logger.warning(f"Unexpected error editing embed for {identifier}: {e}", exc_info=True)
+
+        # Post a new message
+        try:
+            sent = await channel.send(embed=embed)
+            new_ids.append(str(sent.id))
+            logger.debug(f"Posted new persistent embed {sent.id} [{i+1}/{len(embeds)}] for {identifier}")
+        except (discord.errors.Forbidden, discord.errors.NotFound, discord.errors.HTTPException,
+                discord.errors.InvalidData) as e:
+            logger.warning(
+                f"send_or_edit_persistent_embeds to {user} failed on embed {i+1} "
+                f"(discord error: {type(e).__name__}: {e}). Identifier: {identifier}",
+                exc_info=True
+            )
+            user_disconnected_count[user] += 1
+            return None, None
+        except Exception as e:
+            logger.warning(
+                f"send_or_edit_persistent_embeds to {user} failed on embed {i+1} "
+                f"(unknown: {type(e).__name__}: {e}). Identifier: {identifier}",
+                exc_info=True
+            )
+            user_disconnected_count[user] += 1
+            return None, None
+
+    # Delete any leftover messages from a previous run that had more pages
+    for old_id in existing_ids[len(embeds):]:
+        try:
+            msg = await channel.fetch_message(int(old_id))
+            await msg.delete()
+        except Exception:
+            pass
+
+    user_disconnected_count[user] = 0
+    return ",".join(new_ids), str(channel.id)
