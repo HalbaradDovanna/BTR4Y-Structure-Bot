@@ -81,8 +81,10 @@ def fuel_board_row(structure: dict) -> tuple[datetime | None, tuple[str, str]]:
     return fuel_expires, (name, value)
 
 
-def build_fuel_board_embed(structures: list[dict]) -> discord.Embed:
-    """Builds a single Discord embed listing all structures sorted by fuel expiry."""
+def build_fuel_board_embeds(structures: list[dict]) -> list[discord.Embed]:
+    """Builds one or more Discord embeds listing all structures sorted by fuel expiry.
+    Splits into multiple embeds if there are more than 25 structures (Discord limit).
+    """
     rows = []
     for structure in structures:
         expires, field = fuel_board_row(structure)
@@ -91,15 +93,23 @@ def build_fuel_board_embed(structures: list[dict]) -> discord.Embed:
     # Sort: out-of-fuel (None) first, then soonest expiry
     rows.sort(key=lambda x: x[0] if x[0] is not None else datetime.min.replace(tzinfo=timezone.utc))
 
-    embed = discord.Embed(
-        title="⛽ Fuel Status Board",
-        colour=discord.Colour.blue(),
-    )
+    embeds = []
+    # Chunk into groups of 25
+    for chunk_start in range(0, len(rows), 25):
+        chunk = rows[chunk_start:chunk_start + 25]
+        page = (chunk_start // 25) + 1
+        total_pages = (len(rows) - 1) // 25 + 1
 
-    for _, (name, value) in rows:
-        embed.add_field(name=name, value=value, inline=False)
+        title = "⛽ Fuel Status Board"
+        if total_pages > 1:
+            title += f" ({page}/{total_pages})"
 
-    return embed
+        embed = discord.Embed(title=title, colour=discord.Colour.blue())
+        for _, (name, value) in chunk:
+            embed.add_field(name=name, value=value, inline=False)
+        embeds.append(embed)
+
+    return embeds
 
 
 def next_fuel_warning(structure: dict) -> int:
