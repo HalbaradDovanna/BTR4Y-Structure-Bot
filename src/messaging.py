@@ -222,17 +222,19 @@ async def send_or_edit_persistent_embed(bot, user, embed, stored_message_id: str
         logger.debug(f"Posted new persistent embed {sent.id} for {identifier}")
         return str(sent.id), str(channel.id)
     except (discord.errors.Forbidden, discord.errors.NotFound, discord.errors.HTTPException,
-            discord.errors.InvalidData):
-        logger.info(
-            f"send_or_edit_persistent_embed to {user} failed (discord permissions). "
-            f"Identifier: {identifier}"
+            discord.errors.InvalidData) as e:
+        logger.warning(
+            f"send_or_edit_persistent_embed to {user} failed (discord error: {type(e).__name__}: {e}). "
+            f"Identifier: {identifier}",
+            exc_info=True
         )
         user_disconnected_count[user] += 1
         return None, None
     except Exception as e:
         logger.warning(
-            f"send_or_edit_persistent_embed to {user} failed (unknown). "
-            f"Identifier: {identifier}: {e}", exc_info=True
+            f"send_or_edit_persistent_embed to {user} failed (unknown: {type(e).__name__}: {e}). "
+            f"Identifier: {identifier}",
+            exc_info=True
         )
         user_disconnected_count[user] += 1
         return None, None
