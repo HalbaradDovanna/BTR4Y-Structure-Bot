@@ -382,7 +382,7 @@ async def debug(interaction: Interaction, character_id: int):
         structure_bytes = BytesIO(json.dumps(structure_response, indent=2).encode('utf-8'))
         notification_bytes = BytesIO(json.dumps(notification_response, indent=2).encode('utf-8'))
 
-        await interaction.user.send(
+        await interaction.followup.send(
             content=f"Raw ESI data for **{character_name}** (`{character_id}`):",
             files=[
                 discord.File(structure_bytes, filename=f"character_{character_id}_structures.json"),
