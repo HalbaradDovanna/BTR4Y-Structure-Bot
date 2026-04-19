@@ -44,7 +44,7 @@ base_preston = Preston(
     callback_url=os.environ["CCP_REDIRECT_URI"],
     scope="esi-corporations.read_structures.v1 esi-characters.read_notifications.v1 esi-universe.read_structures.v1",
     refresh_token_callback=refresh_token_callback,
-    timeout=6,
+    timeout=30,
 )
 
 intent = discord.Intents.default()
