@@ -113,6 +113,7 @@ class Notification(BaseModel):
 
 class Structure(BaseModel):
     structure_id = CharField(primary_key=True)
+    name = CharField(null=True)
     last_state = CharField()
     last_fuel_warning = IntegerField()
 
@@ -132,6 +133,7 @@ def initialize_database():
         _safe_add_column(Character, 'guild_id',              'VARCHAR(255)')
         _safe_add_column(Character, 'user_id',               'VARCHAR(255)')
         _safe_add_column(Challenge, 'guild_id',              'VARCHAR(255)')
+        _safe_add_column(Structure, 'name',                  'VARCHAR(255)')
 
 
 def _safe_add_column(model, column_name: str, column_type: str):
