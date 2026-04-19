@@ -390,10 +390,11 @@ async def debug(interaction: Interaction, character_id: int):
             ]
         )
     except aiohttp.ClientResponseError as exp:
+        logger.error(f"/debug HTTPError: {exp.status} - {exp.message}", exc_info=True)
         await interaction.followup.send(f"HTTPError: {exp.status} - {exp.message}", ephemeral=True)
     except Exception as e:
-        await interaction.followup.send(f"Unhandled exception: {e}", ephemeral=True)
-
+        logger.error(f"/debug unhandled exception: {type(e).__name__}: {e}", exc_info=True)
+        await interaction.followup.send(f"Unhandled exception: {type(e).__name__}: {e}", ephemeral=True)
 
 @bot.tree.command(name="dryrun", description="Send a test notification to check your setup.")
 @command_error_handler
