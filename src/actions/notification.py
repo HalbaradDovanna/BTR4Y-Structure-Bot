@@ -1,3 +1,4 @@
+import asyncio
 import aiohttp
 import dateutil.parser
 import discord
@@ -13,26 +14,24 @@ logger.setLevel(logging.INFO)
 
 # ── Embed colours per notification type ──────────────────────────────────────
 COLOURS = {
-    "StructureUnderAttack":   discord.Colour.red(),
-    "StructureLostShields":   discord.Colour.orange(),
-    "StructureLostArmor":     discord.Colour.dark_orange(),
-    "StructureUnanchoring":   discord.Colour.yellow(),
-    "StructureWentLowPower":  discord.Colour.yellow(),
-
-    "OrbitalAttacked":        discord.Colour.red(),
-    "OrbitalReinforced":      discord.Colour.orange(),
+    "StructureUnderAttack":  discord.Colour.red(),
+    "StructureLostShields":  discord.Colour.orange(),
+    "StructureLostArmor":    discord.Colour.dark_orange(),
+    "StructureUnanchoring":  discord.Colour.yellow(),
+    "StructureWentLowPower": discord.Colour.yellow(),
+    "OrbitalAttacked":       discord.Colour.red(),
+    "OrbitalReinforced":     discord.Colour.orange(),
 }
 
 # ── Human-readable titles ─────────────────────────────────────────────────────
 TITLES = {
-    "StructureUnderAttack":   "🚨 Structure Under Attack!",
-    "StructureLostShields":   "⚠️ Structure Lost Shields",
-    "StructureLostArmor":     "🔴 Structure Lost Armor",
-    "StructureUnanchoring":   "📦 Structure Unanchoring",
-    "StructureWentLowPower":  "🔋 Structure Went Low Power",
-
-    "OrbitalAttacked":        "🚨 POCO Under Attack!",
-    "OrbitalReinforced":      "⚠️ POCO Reinforced",
+    "StructureUnderAttack":  "🚨 Structure Under Attack!",
+    "StructureLostShields":  "⚠️ Structure Lost Shields",
+    "StructureLostArmor":    "🔴 Structure Lost Armor",
+    "StructureUnanchoring":  "📦 Structure Unanchoring",
+    "StructureWentLowPower": "🔋 Structure Went Low Power",
+    "OrbitalAttacked":       "🚨 POCO Under Attack!",
+    "OrbitalReinforced":     "⚠️ POCO Reinforced",
 }
 
 
@@ -61,6 +60,36 @@ def get_reinforce_exit_time(notification: dict) -> datetime | None:
     return None
 
 
+async def resolve_structure_name(authed_preston: Preston, structure_id: int) -> str:
+    """Resolve a structure name.
+    First checks the local Structure table (populated by status_pings),
+    then falls back to ESI with retries, then falls back to the raw ID.
+    """
+    from models import Structure
+    # Check local DB first — status_pings keeps this up to date
+    try:
+        structure_db = Structure.get_or_none(Structure.structure_id == str(structure_id))
+        if structure_db and hasattr(structure_db, 'name') and structure_db.name:
+            return structure_db.name
+    except Exception:
+        pass
+
+    # Fall back to ESI with retries
+    for attempt in range(3):
+        try:
+            name = (await authed_preston.get_op(
+                "get_universe_structures_structure_id",
+                structure_id=str(structure_id),
+            )).get("name")
+            if name:
+                return name
+        except Exception:
+            pass
+        if attempt < 2:
+            await asyncio.sleep(5)
+    return f"Structure {structure_id}"
+
+
 async def get_attacker_info(notification: dict, preston: Preston) -> tuple[str, str | None]:
     """Returns (attacker_display_name, zkillboard_url_or_None)"""
     character_id = get_attacker_character_id(notification)
@@ -83,7 +112,10 @@ async def get_poco_name(notification: dict, preston: Preston) -> str:
             planet_id = line.split(" ")[1]
     if planet_id is not None:
         try:
-            return (await preston.get_op("get_universe_planets_planet_id", planet_id=planet_id)).get("name", "Unknown POCO")
+            return (await preston.get_op(
+                "get_universe_planets_planet_id",
+                planet_id=planet_id
+            )).get("name", "Unknown POCO")
         except Exception:
             pass
     return "Unknown POCO"
@@ -114,20 +146,15 @@ async def build_structure_embed(notification: dict, authed_preston: Preston, use
 
     colour = COLOURS.get(notif_type, discord.Colour.light_grey())
 
-    # Resolve structure name
-    try:
-        structure_name = (await authed_preston.get_op(
-            "get_universe_structures_structure_id",
-            structure_id=str(get_structure_id(notification)),
-        )).get("name", "Unknown Structure")
-    except Exception:
-        structure_name = f"Structure {get_structure_id(notification)}"
+    # Resolve structure name with retries
+    structure_id = get_structure_id(notification)
+    structure_name = await resolve_structure_name(authed_preston, structure_id)
 
     embed = discord.Embed(title=title, colour=colour)
     embed.add_field(name="Structure", value=structure_name, inline=False)
 
-    # Attacker info (only relevant for attack notifications)
-    if notif_type in ("StructureUnderAttack",):
+    # Attacker info
+    if notif_type == "StructureUnderAttack":
         attacker_name, zkill_url = await get_attacker_info(notification, authed_preston)
         attacker_value = f"[{attacker_name}]({zkill_url})" if zkill_url else attacker_name
         embed.add_field(name="Attacker", value=attacker_value, inline=False)
@@ -143,7 +170,7 @@ async def build_structure_embed(notification: dict, authed_preston: Preston, use
                 inline=False
             )
 
-    # Timestamp
+    # Notification timestamp
     timestamp = dateutil.parser.isoparse(notification.get("timestamp"))
     ts = int(timestamp.timestamp())
     embed.add_field(name="Notified", value=f"<t:{ts}:F> • <t:{ts}:R>", inline=False)

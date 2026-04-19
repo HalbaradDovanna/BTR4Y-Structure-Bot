@@ -131,6 +131,7 @@ async def send_structure_message(structure, bot, user, identifier="<no identifie
     structure_db, created = Structure.get_or_create(
         structure_id=structure.get('structure_id'),
         defaults={
+            "name": structure.get('name'),
             "last_state": structure.get('state'),
             "last_fuel_warning": next_fuel_warning(structure),
         },
@@ -138,6 +139,11 @@ async def send_structure_message(structure, bot, user, identifier="<no identifie
 
     if created:
         return
+
+    # Always keep the name up to date
+    if structure.get('name') and structure_db.name != structure.get('name'):
+        structure_db.name = structure.get('name')
+        structure_db.save()
 
     # State change alert
     if structure_db.last_state != structure.get("state"):
