@@ -44,7 +44,7 @@ base_preston = Preston(
     callback_url=os.environ["CCP_REDIRECT_URI"],
     scope="esi-corporations.read_structures.v1 esi-characters.read_notifications.v1 esi-universe.read_structures.v1",
     refresh_token_callback=refresh_token_callback,
-    timeout=30,
+    timeout=6,
 )
 
 intent = discord.Intents.default()
@@ -366,19 +366,22 @@ async def debug(interaction: Interaction, character_id: int):
         return
 
     try:
+        logger.info(f"/debug step 1: authenticating character {character_id}")
         authed_preston = await base_preston.authenticate_from_token(character.token)
+        logger.info(f"/debug step 2: whoami")
         character_data = await authed_preston.whoami()
         character_name = character_data.get("character_name", "Unknown")
-
+        logger.info(f"/debug step 3: fetching structures for corp {character.corporation_id}")
         structure_response = await authed_preston.get_op(
             "get_corporations_corporation_id_structures",
             corporation_id=character.corporation_id,
         )
+        logger.info(f"/debug step 4: fetching notifications for character {character_id}")
         notification_response = await authed_preston.get_op(
             "get_characters_character_id_notifications",
             character_id=character.character_id
         )
-
+        logger.info(f"/debug step 5: sending files")
         structure_bytes = BytesIO(json.dumps(structure_response, indent=2).encode('utf-8'))
         notification_bytes = BytesIO(json.dumps(notification_response, indent=2).encode('utf-8'))
 
@@ -387,8 +390,10 @@ async def debug(interaction: Interaction, character_id: int):
             files=[
                 discord.File(structure_bytes, filename=f"character_{character_id}_structures.json"),
                 discord.File(notification_bytes, filename=f"character_{character_id}_notifications.json")
-            ]
+            ],
+            ephemeral=True
         )
+        logger.info(f"/debug step 6: done")
     except aiohttp.ClientResponseError as exp:
         logger.error(f"/debug HTTPError: {exp.status} - {exp.message}", exc_info=True)
         await interaction.followup.send(f"HTTPError: {exp.status} - {exp.message}", ephemeral=True)
