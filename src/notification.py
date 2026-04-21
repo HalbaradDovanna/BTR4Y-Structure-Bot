@@ -15,7 +15,6 @@ logger.setLevel(logging.INFO)
 COLOURS = {
     "StructureUnderAttack":   discord.Colour.red(),
     "StructureLostShields":   discord.Colour.orange(),
-    "StructureLostArmor":     discord.Colour.dark_orange(),
     "StructureUnanchoring":   discord.Colour.yellow(),
     "StructureWentLowPower":  discord.Colour.yellow(),
     "OrbitalAttacked":        discord.Colour.red(),
@@ -28,7 +27,6 @@ TITLES = {
     "StructureLostShields":   "⚠️ Structure Lost Shields",
     "StructureLostArmor":     "🔴 Structure Lost Armor",
     "StructureUnanchoring":   "📦 Structure Unanchoring",
-    "StructureWentLowPower":  "🔋 Structure Went Low Power",
     "OrbitalAttacked":        "🚨 POCO Under Attack!",
     "OrbitalReinforced":      "⚠️ POCO Reinforced",
 }
