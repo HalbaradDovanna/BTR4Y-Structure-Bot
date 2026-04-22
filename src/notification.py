@@ -16,7 +16,7 @@ COLOURS = {
     "StructureUnderAttack":   discord.Colour.red(),
     "StructureLostShields":   discord.Colour.orange(),
     "StructureUnanchoring":   discord.Colour.yellow(),
-    "StructureWentLowPower":  discord.Colour.yellow(),
+    "StructureLostArmor":     discord.Colour.yellow(),
     "OrbitalAttacked":        discord.Colour.red(),
     "OrbitalReinforced":      discord.Colour.orange(),
 }
