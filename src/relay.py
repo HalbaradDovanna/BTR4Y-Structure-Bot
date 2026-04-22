@@ -13,7 +13,7 @@ from models import Character, User, Notification
 logger = logging.getLogger('discord.timer.relay')
 
 NOTIFICATION_CACHE_TIME = 60
-NOTIFICATION_PHASES = 12
+NOTIFICATION_PHASES = 6
 
 STATUS_CACHE_TIME = 60
 STATUS_PHASES = 12
