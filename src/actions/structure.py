@@ -23,7 +23,7 @@ state_mapping = {
 }
 
 # Days at which a one-off fuel warning alert is sent
-fuel_warnings = [30, 15, 7, 3, 2, 1, 0]
+fuel_warnings = [7, 3, 1, 0]
 
 logger = logging.getLogger('discord.timer.structure')
 
